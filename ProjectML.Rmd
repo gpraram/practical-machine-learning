@@ -1,0 +1,171 @@
+---
+title: 'Assignment: Human Activity Prediction from Wearable Devices'
+author: "Guillermo Prada-Ramallal"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, cache = TRUE)
+```
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement -- a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+This project uses data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of this project is to predict the manner in which they did the exercise, i.e. the "classe" variable in the training set.
+
+## Data
+
+The training data for this project are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)\
+The test data are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)\
+More information is available from the website [here](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+## Executive Summary
+
+Using a random forest classifier with a k-fold cross-validation of 5, the optimal model has an OOB estimate of the error rate of 0.7%. The variable importance plot shows that the `roll_belt` variable is the most important variable in predicting the `classe` variable. When the model is applied to the training set, an accuracy of 100% is obtained, which is reduced to 99.5% when applied to the validation set.
+
+## Analysis
+
+### Loading Packages and Data
+
+```{r}
+library(caret)
+library(corrplot)
+library(dplyr)
+library(randomForest)
+
+if (!file.exists('train.csv')) 
+{download.file(url = 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', 
+               destfile = 'train.csv', method = 'curl', quiet = TRUE)}
+
+if (!file.exists('test.csv'))
+{download.file(url = 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv', 
+               destfile = 'test.csv', method = 'curl', quiet = TRUE)}
+
+trainRaw <- read.csv('train.csv')
+testRaw <- read.csv('test.csv')
+```
+
+### Pre-processing
+
+1.  First look at the data for each column and remove variables unrelated to exercise.
+
+```{r, results = 'hide'}
+str(trainRaw)
+train <- trainRaw[, 8:ncol(trainRaw)]
+```
+
+2.  Split the data into 70% training and 30% testing set.
+
+```{r}
+set.seed(23954)
+inTrain <- createDataPartition(y = train$classe, p = 0.7, list = F)
+training <- train[inTrain, ]
+testing <- train[-inTrain, ]
+```
+
+3.  Remove the variables with low variability and therefore unlikely to be good predictors.
+
+```{r}
+nzv <- nearZeroVar(train, saveMetrics = T)
+keepFeat <- row.names(nzv[nzv$nzv == FALSE, ])
+training <- training[, keepFeat]
+```
+
+4.  Remove the variables with all NAs.
+
+```{r}
+training <- training[, colSums(is.na(training)) == 0]
+dim(training)
+```
+
+5.  Examine correlation between variables.
+
+```{r corr-plot, fig.width=4, fig.height=3, fig.align='center'}
+corr_data <- select_if(training, is.numeric)
+corrplot(
+    cor(corr_data),
+    method = "color",
+    tl.pos = "n",
+    insig = "blank")
+```
+
+The correlation plot shows that the most of the variables are not very correlated, with the exception of the first few columns at the upper left, and columns at the middle.
+
+### Model Training and Prediction on Validation Set
+
+1.  Set up 5-fold cross validation for training.
+
+```{r}
+trControl <- trainControl(method = 'cv', number = 5)
+```
+
+2.  Fit a model with random forests.
+
+```{r}
+set.seed(2384)
+modelRF <- train(classe ~. , data = training, method = 'rf', trControl = trControl)
+```
+
+-   Summary of the model built with random forests:
+
+```{r}
+modelRF$finalModel
+```
+
+The OOB is the out of sample rate, which is 0.7%. This means the accuracy is considered high and acceptable for the prediction.
+
+Below is shown the plot for the error of each `classe` prediction as the number of trees increase.
+
+```{r oob-plot, fig.width=4.5, fig.height=3.5, fig.align='center'}
+plot(modelRF$finalModel)
+```
+
+As 50 trees are reached, the OOB curve becomes flat. This information can be useful to further fine-tune the model.
+
+```{r, warning=FALSE, include=FALSE, eval=FALSE}
+modelRF1 <- train(classe ~. , data = training, method = 'rf', trControl = trControl, ntree=50)
+modelRF1$finalModel
+```
+
+-   Variable Importance:
+
+```{r varimp-plot, fig.width=5, fig.height=4, fig.align='center'}
+importance <- varImp(modelRF, scale = FALSE)
+plot(importance, top=10)
+```
+
+The variable importance plot shows that the roll_belt variable was most important in predicting the `classe` variable.
+
+-   Predict with the training set and check the confusion matrix and accuracy:
+
+```{r}
+predRFtrain <- predict(modelRF, newdata = training)
+confusionMatrix(predRFtrain, as.factor(training$classe))$table
+confusionMatrix(predRFtrain, as.factor(training$classe))$overall[1]
+```
+
+-   Predict with the validation set and check the confusion matrix and accuracy:
+
+```{r}
+predRFval <- predict(modelRF, newdata = testing)
+confusionMatrix(predRFval, as.factor(testing$classe))$table
+confusionMatrix(predRFval, as.factor(testing$classe))$overall[1]
+```
+
+The accuracy is 99.5% under 5-fold cross validation.
+
+## Prediction Quiz on Test Set
+
+The random forest model is used for prediction in the test set.
+
+```{r}
+predRFtest <- predict(modelRF, newdata = testRaw)
+predRFtest
+```
+
+## Citation
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
